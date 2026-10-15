@@ -18,7 +18,7 @@ python src/main.py
 
 Se você já tem `.env`, **preserve o arquivo existente**. No Windows, ative com `.venv\Scripts\activate` e use `Copy-Item` em vez de `cp`.
 
-Nesta instalação OpenRC, o painel privado fica em **http://127.0.0.1:8787**: status do bot, uso, backups, logs e botões de ligar/desligar/reiniciar. Ele roda em serviço separado (`laynai-dashboard`) e só aceita conexões locais. A configuração e os cuidados de segurança estão em [docs/atualizacao.md](docs/atualizacao.md#painel-local).
+Nesta instalação OpenRC, o painel fica em **https://192.168.1.42:8787** (ou no IP IPv4 atual da máquina): status do bot, uso, backups, logs e botões de ligar/desligar/reiniciar. Ele roda em serviço separado (`laynai-dashboard`), escuta em todas as interfaces IPv4 e exige senha por HTTPS. A configuração e os cuidados de segurança estão em [docs/atualizacao.md](docs/atualizacao.md#painel-na-rede).
 
 O modelo de texto usa obrigatoriamente estas configurações:
 

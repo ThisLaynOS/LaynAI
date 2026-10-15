@@ -36,15 +36,27 @@ tail -n 100 /var/log/laynai/update.log
 
 O atualizador registra a revisão implantada em `data/.deployed-revision` e a revisão que falhou em `data/.failed-revision`. Ambos ficam fora do Git. O serviço OpenRC continua supervisionando o processo entre atualizações.
 
-## Painel local
+## Painel na rede
 
-O painel roda como serviço OpenRC separado (`laynai-dashboard`) em **http://127.0.0.1:8787**. Ele nunca escuta na interface pública. Mostra saúde do bot, uso diário, revisão instalada, pontos de restauração e últimos logs de bot, erros e deploys. Os botões usam apenas as ações fixas `start`, `stop` e `restart` do serviço `laynai`, sem executar texto digitado no navegador. Desligar pelo painel cria `data/.dashboard-paused`, pausa o cron e remove `laynai` do runlevel padrão para ele continuar desligado após reboot. Ligar ou reiniciar com sucesso reativa o início automático e remove a pausa. Quando o painel está rodando, o atualizador também o reinicia após cada deploy para carregar alterações do próprio painel.
+O painel roda como serviço OpenRC separado (`laynai-dashboard`) em **https://192.168.1.42:8787** nesta máquina. O servidor escuta em `0.0.0.0:8787` (todas as interfaces **IPv4**) e exige autenticação Basic sobre HTTPS para páginas, dados e comandos. O usuário é `admin`; a senha aleatória fica somente em `data/.dashboard-password`, fora do Git, com permissão `0600`. Para vê-la no terminal da máquina:
+
+```sh
+sed -n '1p' /root/chatbot/data/.dashboard-password
+```
+
+O certificado TLS autoassinado e sua chave ficam em `data/dashboard.crt` e `data/dashboard.key`. O navegador exibirá um aviso de confiança na primeira visita. Confira a impressão digital SHA-256 antes de aceitar:
+
+```sh
+openssl x509 -in /root/chatbot/data/dashboard.crt -noout -fingerprint -sha256
+```
+
+O painel mostra saúde do bot, uso diário, revisão instalada, pontos de restauração e últimos logs de bot, erros e deploys. Os botões usam apenas as ações fixas `start`, `stop` e `restart` do serviço `laynai`, sem executar texto digitado no navegador. Desligar pelo painel cria `data/.dashboard-paused`, pausa o cron e remove `laynai` do runlevel padrão para ele continuar desligado após reboot. Ligar ou reiniciar com sucesso reativa o início automático e remove a pausa. Quando o painel está rodando, o atualizador também o reinicia após cada deploy para carregar alterações do próprio painel.
 
 ```sh
 rc-service laynai-dashboard status
 tail -n 100 /var/log/laynai/dashboard.err
 ```
 
-O navegador não recebe credenciais, conteúdo dos backups nem comandos de shell. As ações POST exigem origem local e token anti-CSRF. **Loopback não equivale a autenticação** para outras contas/processos desta máquina; não exponha a porta 8787 por proxy, túnel público ou firewall sem adicionar autenticação. O arquivo OpenRC versionado está em `ops/laynai-dashboard.openrc`.
+O navegador não recebe credenciais do bot, conteúdo dos backups nem comandos de shell. As ações POST exigem origem da mesma página e token anti-CSRF, além da senha. O certificado autoassinado protege o tráfego, mas não oferece identidade verificada por uma autoridade pública: confirme a impressão digital ou use um certificado confiável antes de expor o painel à internet. Não encaminhe a porta no roteador sem também configurar controle de acesso de rede. O arquivo OpenRC versionado está em `ops/laynai-dashboard.openrc`.
 
 Referências: [proteção de branches no GitHub](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches) e [supervise-daemon no OpenRC](https://github.com/OpenRC/openrc/blob/master/supervise-daemon-guide.md).

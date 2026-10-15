@@ -1,3 +1,4 @@
+import base64
 import http.client
 import json
 import sys
@@ -16,6 +17,7 @@ from dashboard import server as dashboard
 class DashboardTest(unittest.TestCase):
     def setUp(self):
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), dashboard.Handler)
+        self.server.secure = False
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.addCleanup(self.server.server_close)
@@ -36,6 +38,54 @@ class DashboardTest(unittest.TestCase):
         self.assertEqual(self.request('GET', '/healthz'), (200, {'ok': True}))
         status, _ = self.request('GET', '/healthz', headers={'Host': 'evil.example'})
         self.assertEqual(status, 403)
+
+    def test_remote_access_requires_password_and_numeric_host(self):
+        self.server.secure = True
+        with patch.object(dashboard, 'AUTH_PASSWORD', 'test-password'):
+            status, _ = self.request('GET', '/api/csrf')
+            self.assertEqual(status, 401)
+            wrong = base64.b64encode(b'admin:wrong').decode()
+            status, _ = self.request('GET', '/api/csrf', headers={'Authorization': f'Basic {wrong}'})
+            self.assertEqual(status, 401)
+            correct = base64.b64encode(b'admin:test-password').decode()
+            status, data = self.request('GET', '/api/csrf', headers={
+                'Authorization': f'Basic {correct}', 'Host': f'192.168.1.42:{self.port}'})
+            self.assertEqual(status, 200)
+            self.assertIn('token', data)
+            status, _ = self.request('GET', '/api/csrf', headers={
+                'Authorization': f'Basic {correct}', 'Host': f'evil.example:{self.port}'})
+            self.assertEqual(status, 403)
+
+    def test_secure_post_requires_matching_https_origin(self):
+        self.server.secure = True
+        body = json.dumps({'action': 'restart'})
+        authorization = 'Basic ' + base64.b64encode(b'admin:test-password').decode()
+        headers = {'Authorization': authorization, 'Host': f'192.168.1.42:{self.port}',
+                   'Content-Type': 'application/json', 'X-CSRF-Token': dashboard.CSRF}
+        with patch.object(dashboard, 'AUTH_PASSWORD', 'test-password'), \
+                patch.object(dashboard, 'perform_action') as action:
+            status, _ = self.request('POST', '/api/action', body, {
+                **headers, 'Origin': f'http://192.168.1.42:{self.port}'})
+            self.assertEqual(status, 403)
+            status, data = self.request('POST', '/api/action', body, {
+                **headers, 'Origin': f'https://192.168.1.42:{self.port}'})
+            self.assertEqual(status, 200)
+            self.assertEqual(data['action'], 'restart')
+        action.assert_called_once_with('restart')
+
+    def test_security_files_are_private_and_reused(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            with patch.object(dashboard, 'STATE', root), \
+                    patch.object(dashboard, 'PASSWORD_FILE', root / '.dashboard-password'), \
+                    patch.object(dashboard, 'CERT_FILE', root / 'dashboard.crt'), \
+                    patch.object(dashboard, 'KEY_FILE', root / 'dashboard.key'):
+                password = dashboard.ensure_security_files()
+                self.assertEqual(password, dashboard.ensure_security_files())
+                self.assertGreaterEqual(len(password), 24)
+                self.assertTrue(dashboard.CERT_FILE.is_file())
+                self.assertEqual(dashboard.KEY_FILE.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(dashboard.PASSWORD_FILE.stat().st_mode & 0o777, 0o600)
 
     def test_action_requires_local_origin_and_csrf(self):
         token = self.request('GET', '/api/csrf')[1]['token']

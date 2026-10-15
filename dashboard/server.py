@@ -1,10 +1,15 @@
-"""Private, loopback-only control panel for the local OpenRC bot."""
+"""Authenticated HTTPS control panel for the local OpenRC bot."""
 
+import base64
 import fcntl
+import hmac
+import ipaddress
 import json
 import os
 import secrets
+import socket
 import sqlite3
+import ssl
 import subprocess
 import sys
 import time
@@ -26,6 +31,10 @@ LOCK = STATE / '.update.lock'
 SERVICE = 'laynai'
 PORT = 8787
 CSRF = secrets.token_urlsafe(32)
+PASSWORD_FILE = STATE / '.dashboard-password'
+CERT_FILE = STATE / 'dashboard.crt'
+KEY_FILE = STATE / 'dashboard.key'
+AUTH_PASSWORD = None
 ASSETS = {
     '/': ('index.html', 'text/html; charset=utf-8'),
     '/style.css': ('style.css', 'text/css; charset=utf-8'),
@@ -36,6 +45,42 @@ LOG_FILES = {
     'errors': LOGS / 'bot.err',
     'updates': LOGS / 'update.log',
 }
+
+
+def ensure_security_files():
+    """Create a private login secret and self-signed certificate if absent."""
+    STATE.mkdir(mode=0o700, exist_ok=True)
+    os.chmod(STATE, 0o700)
+    try:
+        fd = os.open(PASSWORD_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        pass
+    else:
+        with os.fdopen(fd, 'w', encoding='ascii') as file:
+            file.write(secrets.token_urlsafe(24) + '\n')
+    os.chmod(PASSWORD_FILE, 0o600)
+    password = PASSWORD_FILE.read_text(encoding='ascii').strip()
+    if len(password) < 24:
+        raise RuntimeError('Senha do painel inválida.')
+
+    if CERT_FILE.exists() != KEY_FILE.exists():
+        raise RuntimeError('Certificado ou chave TLS ausente; verifique data/dashboard.crt e data/dashboard.key.')
+    if not CERT_FILE.exists():
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            try:
+                probe.connect(('192.0.2.1', 9))
+                local_ip = probe.getsockname()[0]
+            except OSError:
+                local_ip = '127.0.0.1'
+        sans = f'DNS:localhost,IP:127.0.0.1,IP:{local_ip}'
+        subprocess.run(('openssl', 'req', '-x509', '-newkey', 'rsa:3072', '-sha256',
+                        '-nodes', '-days', '365', '-keyout', str(KEY_FILE),
+                        '-out', str(CERT_FILE), '-subj', '/CN=LaynAI-Dashboard',
+                        '-addext', f'subjectAltName={sans}'),
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                       check=True, timeout=30)
+    os.chmod(KEY_FILE, 0o600)
+    return password
 
 
 def service_status():
@@ -186,8 +231,30 @@ class Handler(BaseHTTPRequestHandler):
         print('%s %s' % (self.address_string(), format % args), flush=True)
 
     def _allowed_host(self):
-        port = self.server.server_port
-        return self.headers.get('Host') in (f'127.0.0.1:{port}', f'localhost:{port}')
+        try:
+            host = urllib.parse.urlsplit('//' + self.headers.get('Host', ''))
+            if host.port != self.server.server_port:
+                return False
+            if host.hostname == 'localhost':
+                return ipaddress.ip_address(self.client_address[0]).is_loopback
+            return ipaddress.ip_address(host.hostname).version == 4
+        except (ValueError, TypeError):
+            return False
+
+    def _authenticated(self):
+        if self.path == '/healthz' and ipaddress.ip_address(self.client_address[0]).is_loopback:
+            return True
+        if not getattr(self.server, 'secure', True):
+            return True
+        header = self.headers.get('Authorization', '')
+        if not header.startswith('Basic '):
+            return False
+        try:
+            credentials = base64.b64decode(header[6:], validate=True).decode('utf-8')
+        except (ValueError, UnicodeError):
+            return False
+        username, separator, password = credentials.partition(':')
+        return separator == ':' and hmac.compare_digest(username, 'admin') and hmac.compare_digest(password, AUTH_PASSWORD)
 
     def _send(self, status, body, content_type='application/json; charset=utf-8'):
         if not isinstance(body, bytes):
@@ -200,12 +267,16 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('X-Frame-Options', 'DENY')
         self.send_header('Referrer-Policy', 'no-referrer')
         self.send_header('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
+        if status == 401:
+            self.send_header('WWW-Authenticate', 'Basic realm="LaynAI Dashboard", charset="UTF-8"')
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
         if not self._allowed_host():
             return self._send(403, {'error': 'Host não permitido.'})
+        if not self._authenticated():
+            return self._send(401, {'error': 'Autenticação necessária.'})
         path = urllib.parse.urlsplit(self.path)
         try:
             if path.path == '/healthz':
@@ -239,10 +310,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self._allowed_host():
             return self._send(403, {'error': 'Host não permitido.'})
+        if not self._authenticated():
+            return self._send(401, {'error': 'Autenticação necessária.'})
         origin = self.headers.get('Origin')
-        allowed = (f'http://127.0.0.1:{self.server.server_port}',
-                   f'http://localhost:{self.server.server_port}')
-        if origin not in allowed or self.headers.get('X-CSRF-Token') != CSRF:
+        scheme = 'https' if getattr(self.server, 'secure', True) else 'http'
+        allowed_origin = f'{scheme}://{self.headers.get("Host")}'
+        if origin != allowed_origin or self.headers.get('X-CSRF-Token') != CSRF:
             return self._send(403, {'error': 'Requisição não autorizada.'})
         if self.path != '/api/action' or self.headers.get('Content-Type') != 'application/json':
             return self._send(404, {'error': 'Não encontrado.'})
@@ -264,8 +337,15 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
-    server = ThreadingHTTPServer(('127.0.0.1', PORT), Handler)
-    print(f'Dashboard LaynAI em http://127.0.0.1:{PORT}', flush=True)
+    global AUTH_PASSWORD
+    AUTH_PASSWORD = ensure_security_files()
+    server = ThreadingHTTPServer(('0.0.0.0', PORT), Handler)
+    server.secure = True
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.minimum_version = ssl.TLSVersion.TLSv1_2
+    context.load_cert_chain(CERT_FILE, KEY_FILE)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    print(f'Dashboard LaynAI HTTPS em 0.0.0.0:{PORT}', flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
