@@ -1,60 +1,37 @@
-# Atualização pelo repositório
+# Atualização automática pelo Git
 
-O bot recebe código da branch `main` após você aceitar um pull request. O processo que consulta o Git roda **no computador host**, fora do container. O bot não precisa de acesso ao GitHub nem de permissão para alterar o próprio código.
+Nesta máquina, o bot roda em `/root/chatbot` como serviço OpenRC `laynai`. O `crond` chama `scripts/update_from_git.py` a cada cinco minutos. O atualizador busca somente `origin/main`; portanto, uma alteração do seu amigo entra em produção depois que você aceita o pull request e faz o merge em `main`.
 
-## 1. Publicar o código
+## Fluxo de revisão
 
-Se o diretório ainda não for um repositório Git, inicialize-o. Prepare o primeiro commit com uma lista explícita de arquivos:
+Peça ao colaborador para abrir um pull request. Revise o código e aguarde o workflow `Tests` passar antes do merge. No GitHub, proteja a branch `main` para exigir pull request e aprovação, bloquear force push e exigir os status checks do workflow. O código aprovado tem acesso às credenciais locais quando o bot é reiniciado, mesmo que os segredos não estejam no repositório.
 
-```sh
-git init -b main
-git add .gitignore .dockerignore .env.example .github Dockerfile README.md compose.yaml compose.credentials.yaml requirements.txt requirements.lock docs scripts src test
-git diff --cached --name-only
-git diff --cached --check
-git commit -m "Publicar código do bot"
-```
+O `.env`, as credenciais Google, a chave SSH e o SQLite ficam fora do Git. Antes de um novo commit, confira `git status --short` e `git diff --cached --name-only`. Se um segredo já tiver entrado no histórico, revogue ou troque a credencial antes de publicar.
 
-Confira a lista **antes** do commit: `.env`, `data/`, `backups/`, chaves privadas e arquivos de credenciais não devem aparecer. O `.gitignore` protege nomes conhecidos, mas não substitui essa conferência. Se qualquer segredo já tiver entrado em um commit, removê-lo em outro commit não apaga o histórico; revogue ou troque a credencial antes de publicar.
+## O que o atualizador faz
 
-Crie um repositório vazio no serviço escolhido e conecte o endereço fornecido por ele:
+1. Recusa alterações locais em arquivos versionados e histórico remoto divergente.
+2. Testa a revisão nova em uma área temporária, sem alterar os arquivos usados pelo serviço.
+3. Cria um snapshot consistente do SQLite em `backups/`.
+4. Avança a branch local, reinicia `rc-service laynai` e espera `/readyz` confirmar Gateway e banco.
+5. Se o reinício falhar, restaura a revisão anterior e não tenta a revisão ruim novamente até aparecer outro commit remoto.
 
-```sh
-git remote add origin ENDERECO_DO_REPOSITORIO
-git push -u origin main
-```
+Alterações em `requirements.lock` exigem atualização manual do `.venv`; o atualizador interrompe a implantação sem reiniciar o bot. Mudanças nos comandos de barra do Discord também podem exigir `python scripts/register.py` após a implantação.
 
-Guarde o token Discord no `.env` local e o JSON Google fora do repositório. O SQLite continua no volume Docker `bot-data`. Se você já tem um bot rodando nesta máquina, atualize a **mesma instalação e o mesmo projeto Compose** para não iniciar uma segunda instância com o mesmo token.
-
-## 2. Aprovar alterações
-
-Seu amigo cria uma branch e abre um pull request. Você revisa a mudança e só faz o merge em `main` depois que a verificação `Tests` passar. No GitHub, configure uma regra para `main` que exija pull request, sua aprovação e as verificações do workflow, além de impedir force push. A disponibilidade de proteção obrigatória em repositórios privados depende do plano; se não estiver disponível, mantenha o merge sob seu controle e não conceda escrita direta em `main`.
-
-Mesmo sem credenciais no Git, código novo executado pelo bot pode ler as credenciais locais. Revise alterações em `src/`, `scripts/`, `Dockerfile`, arquivos Compose e workflows com esse acesso em mente.
-
-## 3. Atualizar no computador de casa
-
-O atualizador requer Linux, Git, Docker Compose e um Python com as dependências do projeto instaladas. Use a instalação existente do bot; deixe `.env` no diretório do projeto. Para um repositório privado no GitHub, configure uma *deploy key* de leitura no host. O atualizador só precisa buscar o código.
-
-Execute uma vez para conferir:
-
-```sh
-.venv/bin/python scripts/update_from_git.py
-```
-
-Se você monta um JSON de conta de serviço com `compose.credentials.yaml`, mantenha `GOOGLE_CREDENTIALS_HOST_PATH` definido no ambiente ou no `.env` local e use:
-
-```sh
-.venv/bin/python scripts/update_from_git.py --with-google-credentials-file
-```
-
-Para consultar automaticamente a cada cinco minutos, adicione ao `crontab -e`, substituindo `/CAMINHO/laynai` pelo caminho absoluto da instalação:
+O agendamento nesta máquina usa o crontab do root:
 
 ```cron
-*/5 * * * * /CAMINHO/laynai/.venv/bin/python /CAMINHO/laynai/scripts/update_from_git.py >> /CAMINHO/laynai/data/update.log 2>&1
+*/5 * * * * /root/chatbot/.venv/bin/python /root/chatbot/scripts/update_from_git.py >> /var/log/laynai/update.log 2>&1
 ```
 
-Acrescente `--with-google-credentials-file` à linha do cron quando usar o arquivo de credenciais. O cron precisa rodar com o mesmo usuário que consegue executar `docker compose` e ler a credencial Google. Não execute dois bots simultaneamente.
+Para consultar imediatamente ou acompanhar o serviço:
 
-O script usa um bloqueio para impedir atualizações sobrepostas. Ele busca `origin/main`, aceita apenas avanço normal do histórico, testa o código, valida o Compose, constrói a imagem e espera `/readyz`. Se a nova versão não ficar pronta, tenta voltar à imagem anterior. Uma falha fica registrada em `data/update.log` e a versão não é marcada como implantada; a próxima execução tenta novamente. Se você alterar a configuração Compose de forma incompatível, pode ser necessária uma restauração manual.
+```sh
+/root/chatbot/.venv/bin/python /root/chatbot/scripts/update_from_git.py
+rc-service laynai status
+tail -n 100 /var/log/laynai/update.log
+```
 
-Referências: [proteção de branches](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches), [chaves de implantação](https://docs.github.com/en/authentication/connecting-to-github-with-ssh/managing-deploy-keys) e [recriação de containers pelo Compose](https://docs.docker.com/reference/cli/docker/compose/up/).
+O atualizador registra a revisão implantada em `data/.deployed-revision` e a revisão que falhou em `data/.failed-revision`. Ambos ficam fora do Git. O serviço OpenRC continua supervisionando o processo entre atualizações.
+
+Referências: [proteção de branches no GitHub](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches) e [supervise-daemon no OpenRC](https://github.com/OpenRC/openrc/blob/master/supervise-daemon-guide.md).

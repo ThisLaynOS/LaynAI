@@ -153,9 +153,11 @@ O transporte respeita `Retry-After`, faz espera progressiva e cancela operaçõe
 - Histórico textual fica no SQLite, com permissão local restrita e sem criptografia própria. Proteja o disco e os backups. Limpeza ocorre a cada minuto; contagens de tokens são retidas por 30 dias.
 - O projeto não oferece exclusão de canais, atribuição de permissões, execução de código, navegador aberto, voz ou leitura de documentos anexados. Fotos são aceitas para edição com Nano Banana. A pesquisa é uma consulta ao Google, com fontes devolvidas na resposta.
 
-## Operação com Docker
+## Atualizações automáticas nesta máquina
 
-Para publicar o código e instalar alterações aprovadas por pull request no computador de casa, veja [Atualização pelo repositório](docs/atualizacao.md).
+O serviço OpenRC `laynai` usa este diretório. Depois que um pull request aprovado entra em `main`, o atualizador local testa o commit e reinicia o serviço. Veja [Atualização automática pelo Git](docs/atualizacao.md).
+
+## Operação com Docker
 
 ```sh
 docker compose up -d --build
