@@ -12,11 +12,13 @@ O `.env`, as credenciais Google, a chave SSH e o SQLite ficam fora do Git. Antes
 
 1. Recusa alterações locais em arquivos versionados e histórico remoto divergente.
 2. Testa a revisão nova em uma área temporária, sem alterar os arquivos usados pelo serviço.
-3. Cria um snapshot consistente do SQLite em `backups/`.
-4. Avança a branch local, reinicia `rc-service laynai` e confirma `/readyz` e a supervisão pelo OpenRC.
-5. Se o reinício falhar, restaura a revisão anterior e não tenta a revisão ruim novamente até aparecer outro commit remoto.
+3. Para o serviço e cria, **antes de aplicar o commit**, um ponto de restauração privado em `backups/restorepoints/`: `code.tar` (todos os arquivos versionados da revisão anterior), `.env`, `bot.sqlite` consistente e o SHA anterior. Se a cópia falhar, não muda o código e religa a versão anterior.
+4. Avança a branch local, inicia `rc-service laynai` e confirma `/readyz` e a supervisão pelo OpenRC.
+5. Se a implantação falhar, para o serviço, volta o código à revisão anterior, restaura `.env` e SQLite do ponto de restauração, e inicia a versão antiga. Não tenta novamente a revisão ruim até aparecer outro commit remoto. Se o rollback também falhar, o ponto de restauração fica preservado para recuperação manual.
 
 Alterações em `requirements.lock` exigem atualização manual do `.venv`; o atualizador interrompe a implantação sem reiniciar o bot. Mudanças nos comandos de barra do Discord também podem exigir `python scripts/register.py` após a implantação.
+
+Os pontos de restauração ficam **só nesta máquina**, fora do Git, com permissões restritas. Eles cobrem o código versionado, `.env` e o banco configurado em `DATABASE_PATH`; não cobrem arquivos externos, como credenciais Google fora do projeto, nem mudanças manuais no `.venv` (que o atualizador não altera). Não há limpeza automática dos pontos de restauração. Se uma versão maliciosa for aprovada, ela pode acessar os segredos locais: backup não substitui revisão de PR.
 
 O agendamento nesta máquina usa o crontab do root:
 

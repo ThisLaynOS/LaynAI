@@ -7,12 +7,15 @@ entry may call this repeatedly; only a new, validated commit restarts the bot.
 import argparse
 import fcntl
 import os
+import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 import urllib.error
 import urllib.request
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -23,6 +26,7 @@ DEPLOYED_REVISION = STATE_DIR / '.deployed-revision'
 FAILED_REVISION = STATE_DIR / '.failed-revision'
 READY_URL = 'http://127.0.0.1:8080/readyz'
 SERVICE = 'laynai'
+BACKUP_DIR = ROOT / 'backups' / 'restorepoints'
 
 
 def command(*args, cwd=ROOT, capture=False, new_session=False):
@@ -56,11 +60,15 @@ def ready(timeout=75):
     return False
 
 
-def restart():
-    command('rc-service', SERVICE, 'restart', new_session=True)
+def start_service():
+    command('rc-service', SERVICE, 'start', new_session=True)
     if not ready():
-        raise RuntimeError(f'{SERVICE} não ficou pronto após o reinício.')
+        raise RuntimeError(f'{SERVICE} não ficou pronto após a inicialização.')
     command('rc-service', SERVICE, 'status')
+
+
+def stop_service():
+    command('rc-service', SERVICE, 'stop', new_session=True)
 
 
 def validate(revision):
@@ -100,19 +108,69 @@ def ensure_same_dependencies(current, target):
         raise subprocess.CalledProcessError(result.returncode, result.args)
 
 
-def backup_database(revision):
-    timestamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')
-    destination = ROOT / 'backups' / f'before-{revision[:12]}-{timestamp}.sqlite'
-    command(sys.executable, 'scripts/backup.py', '--output', str(destination))
+def database_path():
+    sys.path.insert(0, str(ROOT / 'src'))
+    from config import load_env
+    load_env(str(ROOT / '.env'))
+    return (ROOT / os.environ.get('DATABASE_PATH', './data/bot.sqlite')).resolve()
 
 
-def restore_previous(branch, previous):
+def backup_database(source, destination):
+    command(sys.executable, 'scripts/backup.py', '--database', str(source),
+            '--output', str(destination))
+
+
+def backup_state(revision):
+    """Save everything this updater can change before installing new code."""
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    os.chmod(BACKUP_DIR, 0o700)
+    staging = Path(tempfile.mkdtemp(prefix='.pending-', dir=BACKUP_DIR))
+    destination = BACKUP_DIR / f'{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}-{revision[:12]}'
+    try:
+        db_path = database_path()
+        git('archive', '--format=tar', f'--output={staging / "code.tar"}', revision)
+        os.chmod(staging / 'code.tar', 0o600)
+        shutil.copy2(ROOT / '.env', staging / '.env')
+        os.chmod(staging / '.env', 0o600)
+        backup_database(db_path, staging / 'bot.sqlite')
+        (staging / 'revision').write_text(revision + '\n')
+        os.replace(staging, destination)
+    except BaseException:
+        shutil.rmtree(staging)
+        raise
+    print(f'Ponto de restauração: {destination}', flush=True)
+    return destination, db_path
+
+
+def restore_database(snapshot, destination):
+    source = snapshot / 'bot.sqlite'
+    with closing(sqlite3.connect(f'{source.as_uri()}?mode=ro', uri=True)) as connection:
+        if connection.execute('PRAGMA quick_check').fetchone()[0] != 'ok':
+            raise RuntimeError('Backup SQLite inválido; restauração interrompida.')
+    fd, temporary = tempfile.mkstemp(prefix='.restore-', dir=destination.parent)
+    os.close(fd)
+    temporary = Path(temporary)
+    try:
+        shutil.copy2(source, temporary)
+        os.chmod(temporary, 0o600)
+        for suffix in ('-wal', '-shm'):
+            Path(str(destination) + suffix).unlink(missing_ok=True)
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def restore_previous(branch, previous, snapshot, db_path):
+    stop_service()
     if git('status', '--porcelain', '--untracked-files=no', capture=True):
         raise RuntimeError('Arquivos versionados mudaram durante a falha; restaure manualmente.')
     git('switch', '--detach', previous)
     git('branch', '--force', branch, previous)
     git('switch', branch)
-    restart()
+    shutil.copy2(snapshot / '.env', ROOT / '.env')
+    os.chmod(ROOT / '.env', 0o600)
+    restore_database(snapshot, db_path)
+    start_service()
 
 
 def deploy(branch='main'):
@@ -135,16 +193,23 @@ def deploy(branch='main'):
     ensure_same_dependencies(current, target)
     print(f'Validando {target[:12]}', flush=True)
     validate(target)
-    backup_database(current)
-    git('merge', '--ff-only', target)
-
+    stop_service()
     try:
-        restart()
+        snapshot, db_path = backup_state(current)
+    except (OSError, subprocess.CalledProcessError, RuntimeError):
+        start_service()
+        raise
+    try:
+        git('merge', '--ff-only', target)
+        start_service()
     except (OSError, subprocess.CalledProcessError, RuntimeError):
         write_revision(FAILED_REVISION, target)
-        print(f'Restaurando {current[:12]}...', file=sys.stderr, flush=True)
-        restore_previous(branch, current)
-        raise RuntimeError(f'A revisão {target[:12]} falhou; serviço restaurado em {current[:12]}.')
+        print(f'Restaurando {current[:12]} de {snapshot}...', file=sys.stderr, flush=True)
+        try:
+            restore_previous(branch, current, snapshot, db_path)
+        except (OSError, subprocess.CalledProcessError, RuntimeError) as error:
+            raise RuntimeError(f'Rollback automático falhou; ponto de restauração preservado em {snapshot}.') from error
+        raise RuntimeError(f'A revisão {target[:12]} falhou; código e banco restaurados em {current[:12]}.')
 
     write_revision(DEPLOYED_REVISION, target)
     FAILED_REVISION.unlink(missing_ok=True)
