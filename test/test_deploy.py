@@ -94,6 +94,13 @@ class DeployTest(unittest.TestCase):
                 updater.deploy()
         self.assertFalse(any(call.args[0] == 'fetch' for call in git.call_args_list))
 
+    def test_restart_checks_openrc_supervision(self):
+        with patch.object(updater, 'command') as command, \
+                patch.object(updater, 'ready', return_value=True):
+            updater.restart()
+        command.assert_any_call('rc-service', 'laynai', 'restart', new_session=True)
+        command.assert_any_call('rc-service', 'laynai', 'status')
+
 
 if __name__ == '__main__':
     unittest.main()

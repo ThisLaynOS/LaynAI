@@ -25,9 +25,10 @@ READY_URL = 'http://127.0.0.1:8080/readyz'
 SERVICE = 'laynai'
 
 
-def command(*args, cwd=ROOT, capture=False):
+def command(*args, cwd=ROOT, capture=False, new_session=False):
     result = subprocess.run(args, cwd=cwd, check=True, text=True,
-                            stdout=subprocess.PIPE if capture else None)
+                            stdout=subprocess.PIPE if capture else None,
+                            start_new_session=new_session)
     return result.stdout.strip() if capture else None
 
 
@@ -56,9 +57,10 @@ def ready(timeout=75):
 
 
 def restart():
-    command('rc-service', SERVICE, 'restart')
+    command('rc-service', SERVICE, 'restart', new_session=True)
     if not ready():
         raise RuntimeError(f'{SERVICE} não ficou pronto após o reinício.')
+    command('rc-service', SERVICE, 'status')
 
 
 def validate(revision):

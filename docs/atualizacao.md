@@ -13,7 +13,7 @@ O `.env`, as credenciais Google, a chave SSH e o SQLite ficam fora do Git. Antes
 1. Recusa alterações locais em arquivos versionados e histórico remoto divergente.
 2. Testa a revisão nova em uma área temporária, sem alterar os arquivos usados pelo serviço.
 3. Cria um snapshot consistente do SQLite em `backups/`.
-4. Avança a branch local, reinicia `rc-service laynai` e espera `/readyz` confirmar Gateway e banco.
+4. Avança a branch local, reinicia `rc-service laynai` e confirma `/readyz` e a supervisão pelo OpenRC.
 5. Se o reinício falhar, restaura a revisão anterior e não tenta a revisão ruim novamente até aparecer outro commit remoto.
 
 Alterações em `requirements.lock` exigem atualização manual do `.venv`; o atualizador interrompe a implantação sem reiniciar o bot. Mudanças nos comandos de barra do Discord também podem exigir `python scripts/register.py` após a implantação.
