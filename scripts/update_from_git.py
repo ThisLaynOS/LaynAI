@@ -9,7 +9,6 @@ import fcntl
 import os
 import shutil
 import sqlite3
-import ssl
 import subprocess
 import sys
 import tempfile
@@ -83,11 +82,7 @@ def dashboard_running():
 
 def restart_dashboard():
     command('rc-service', DASHBOARD_SERVICE, 'restart', new_session=True)
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
-    with urllib.request.urlopen('https://127.0.0.1:8787/healthz', timeout=3,
-                                context=context) as response:
+    with urllib.request.urlopen('http://127.0.0.1:8787/healthz', timeout=3) as response:
         if response.status != 200:
             raise RuntimeError('O painel não respondeu após reiniciar.')
     command('rc-service', DASHBOARD_SERVICE, 'status')

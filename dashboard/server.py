@@ -1,4 +1,4 @@
-"""Authenticated HTTPS control panel for the local OpenRC bot."""
+"""Password-protected LAN control panel for the local OpenRC bot."""
 
 import base64
 import fcntl
@@ -7,9 +7,7 @@ import ipaddress
 import json
 import os
 import secrets
-import socket
 import sqlite3
-import ssl
 import subprocess
 import sys
 import time
@@ -32,9 +30,9 @@ SERVICE = 'laynai'
 PORT = 8787
 CSRF = secrets.token_urlsafe(32)
 PASSWORD_FILE = STATE / '.dashboard-password'
-CERT_FILE = STATE / 'dashboard.crt'
-KEY_FILE = STATE / 'dashboard.key'
 AUTH_PASSWORD = None
+ALLOWED_NETWORKS = tuple(ipaddress.ip_network(network) for network in (
+    '127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
 ASSETS = {
     '/': ('index.html', 'text/html; charset=utf-8'),
     '/style.css': ('style.css', 'text/css; charset=utf-8'),
@@ -47,8 +45,8 @@ LOG_FILES = {
 }
 
 
-def ensure_security_files():
-    """Create a private login secret and self-signed certificate if absent."""
+def ensure_password():
+    """Create or reuse a private password stored outside Git."""
     STATE.mkdir(mode=0o700, exist_ok=True)
     os.chmod(STATE, 0o700)
     try:
@@ -62,24 +60,6 @@ def ensure_security_files():
     password = PASSWORD_FILE.read_text(encoding='ascii').strip()
     if len(password) < 24:
         raise RuntimeError('Senha do painel inválida.')
-
-    if CERT_FILE.exists() != KEY_FILE.exists():
-        raise RuntimeError('Certificado ou chave TLS ausente; verifique data/dashboard.crt e data/dashboard.key.')
-    if not CERT_FILE.exists():
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-            try:
-                probe.connect(('192.0.2.1', 9))
-                local_ip = probe.getsockname()[0]
-            except OSError:
-                local_ip = '127.0.0.1'
-        sans = f'DNS:localhost,IP:127.0.0.1,IP:{local_ip}'
-        subprocess.run(('openssl', 'req', '-x509', '-newkey', 'rsa:3072', '-sha256',
-                        '-nodes', '-days', '365', '-keyout', str(KEY_FILE),
-                        '-out', str(CERT_FILE), '-subj', '/CN=LaynAI-Dashboard',
-                        '-addext', f'subjectAltName={sans}'),
-                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                       check=True, timeout=30)
-    os.chmod(KEY_FILE, 0o600)
     return password
 
 
@@ -241,10 +221,14 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, TypeError):
             return False
 
+    def _allowed_client(self):
+        address = ipaddress.ip_address(self.client_address[0])
+        return any(address in network for network in ALLOWED_NETWORKS)
+
     def _authenticated(self):
         if self.path == '/healthz' and ipaddress.ip_address(self.client_address[0]).is_loopback:
             return True
-        if not getattr(self.server, 'secure', True):
+        if not getattr(self.server, 'auth_required', True):
             return True
         header = self.headers.get('Authorization', '')
         if not header.startswith('Basic '):
@@ -273,6 +257,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if not self._allowed_client():
+            return self._send(403, {'error': 'Acesso permitido apenas na rede local.'})
         if not self._allowed_host():
             return self._send(403, {'error': 'Host não permitido.'})
         if not self._authenticated():
@@ -308,6 +294,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(500, {'error': 'Falha ao carregar dados.'})
 
     def do_POST(self):
+        if not self._allowed_client():
+            return self._send(403, {'error': 'Acesso permitido apenas na rede local.'})
         if not self._allowed_host():
             return self._send(403, {'error': 'Host não permitido.'})
         if not self._authenticated():
@@ -338,14 +326,11 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     global AUTH_PASSWORD
-    AUTH_PASSWORD = ensure_security_files()
+    AUTH_PASSWORD = ensure_password()
     server = ThreadingHTTPServer(('0.0.0.0', PORT), Handler)
-    server.secure = True
-    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    context.minimum_version = ssl.TLSVersion.TLSv1_2
-    context.load_cert_chain(CERT_FILE, KEY_FILE)
-    server.socket = context.wrap_socket(server.socket, server_side=True)
-    print(f'Dashboard LaynAI HTTPS em 0.0.0.0:{PORT}', flush=True)
+    server.auth_required = True
+    server.secure = False
+    print(f'Dashboard LaynAI HTTP em 0.0.0.0:{PORT} (somente rede local)', flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     finally:

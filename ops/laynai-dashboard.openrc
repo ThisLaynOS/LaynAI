@@ -1,7 +1,7 @@
 #!/sbin/openrc-run
 
 name="LaynAI Dashboard"
-description="Painel HTTPS de controle do LaynAI"
+description="Painel HTTP de controle do LaynAI"
 supervisor=supervise-daemon
 
 : "${directory:=/root/chatbot}"
@@ -32,10 +32,10 @@ start_pre() {
 start_post() {
     local i=0
     while [ "$i" -lt 15 ]; do
-        curl -kfsS --max-time 3 "https://127.0.0.1:8787/healthz" >/dev/null 2>&1 && return 0
+        curl -fsS --max-time 3 "http://127.0.0.1:8787/healthz" >/dev/null 2>&1 && return 0
         sleep 1
         i=$((i + 1))
     done
-    eerror "Dashboard HTTPS não respondeu em localhost:8787"
+    eerror "Dashboard HTTP não respondeu em localhost:8787"
     return 1
 }

@@ -1,5 +1,6 @@
 import base64
 import http.client
+import ipaddress
 import json
 import sys
 import tempfile
@@ -7,6 +8,7 @@ import threading
 import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -18,6 +20,7 @@ class DashboardTest(unittest.TestCase):
     def setUp(self):
         self.server = ThreadingHTTPServer(('127.0.0.1', 0), dashboard.Handler)
         self.server.secure = False
+        self.server.auth_required = False
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         self.addCleanup(self.server.server_close)
@@ -39,8 +42,8 @@ class DashboardTest(unittest.TestCase):
         status, _ = self.request('GET', '/healthz', headers={'Host': 'evil.example'})
         self.assertEqual(status, 403)
 
-    def test_remote_access_requires_password_and_numeric_host(self):
-        self.server.secure = True
+    def test_lan_access_requires_password_and_numeric_host(self):
+        self.server.auth_required = True
         with patch.object(dashboard, 'AUTH_PASSWORD', 'test-password'):
             status, _ = self.request('GET', '/api/csrf')
             self.assertEqual(status, 401)
@@ -56,8 +59,8 @@ class DashboardTest(unittest.TestCase):
                 'Authorization': f'Basic {correct}', 'Host': f'evil.example:{self.port}'})
             self.assertEqual(status, 403)
 
-    def test_secure_post_requires_matching_https_origin(self):
-        self.server.secure = True
+    def test_authenticated_post_requires_matching_http_origin(self):
+        self.server.auth_required = True
         body = json.dumps({'action': 'restart'})
         authorization = 'Basic ' + base64.b64encode(b'admin:test-password').decode()
         headers = {'Authorization': authorization, 'Host': f'192.168.1.42:{self.port}',
@@ -65,27 +68,30 @@ class DashboardTest(unittest.TestCase):
         with patch.object(dashboard, 'AUTH_PASSWORD', 'test-password'), \
                 patch.object(dashboard, 'perform_action') as action:
             status, _ = self.request('POST', '/api/action', body, {
-                **headers, 'Origin': f'http://192.168.1.42:{self.port}'})
+                **headers, 'Origin': f'https://192.168.1.42:{self.port}'})
             self.assertEqual(status, 403)
             status, data = self.request('POST', '/api/action', body, {
-                **headers, 'Origin': f'https://192.168.1.42:{self.port}'})
+                **headers, 'Origin': f'http://192.168.1.42:{self.port}'})
             self.assertEqual(status, 200)
             self.assertEqual(data['action'], 'restart')
         action.assert_called_once_with('restart')
 
-    def test_security_files_are_private_and_reused(self):
+    def test_password_file_is_private_and_reused(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             with patch.object(dashboard, 'STATE', root), \
-                    patch.object(dashboard, 'PASSWORD_FILE', root / '.dashboard-password'), \
-                    patch.object(dashboard, 'CERT_FILE', root / 'dashboard.crt'), \
-                    patch.object(dashboard, 'KEY_FILE', root / 'dashboard.key'):
-                password = dashboard.ensure_security_files()
-                self.assertEqual(password, dashboard.ensure_security_files())
+                    patch.object(dashboard, 'PASSWORD_FILE', root / '.dashboard-password'):
+                password = dashboard.ensure_password()
+                self.assertEqual(password, dashboard.ensure_password())
                 self.assertGreaterEqual(len(password), 24)
-                self.assertTrue(dashboard.CERT_FILE.is_file())
-                self.assertEqual(dashboard.KEY_FILE.stat().st_mode & 0o777, 0o600)
                 self.assertEqual(dashboard.PASSWORD_FILE.stat().st_mode & 0o777, 0o600)
+
+    def test_public_clients_are_denied(self):
+        allowed = dashboard.ALLOWED_NETWORKS
+        self.assertTrue(any(ipaddress.ip_address('192.168.1.20') in network for network in allowed))
+        self.assertFalse(any(ipaddress.ip_address('203.0.113.20') in network for network in allowed))
+        self.assertFalse(dashboard.Handler._allowed_client(
+            SimpleNamespace(client_address=('203.0.113.20', 1234))))
 
     def test_action_requires_local_origin_and_csrf(self):
         token = self.request('GET', '/api/csrf')[1]['token']
