@@ -1,3 +1,4 @@
+# Teste de sicronizaçao
 import asyncio
 import json
 import os
