@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>LaynAI · Central de controle</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail" aria-label="Navegação">
+      <div class="brandmark" aria-hidden="true">L<span>✦</span></div>
+      <div class="rail-line"></div>
+      <a class="rail-icon active" href="#visao" aria-label="Visão geral" title="Visão geral">◫</a>
+      <a class="rail-icon" href="#console" aria-label="Console" title="Console">▤</a>
+      <a class="rail-icon" href="#backups" aria-label="Backups" title="Backups">◷</a>
+      <div class="rail-bottom"><span class="rail-pulse"></span></div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div class="crumb"><span class="crumb-dot"></span> LaynAI <span class="slash">/</span> Painel local</div>
+        <div class="top-right"><span class="local-pill"><span></span> SOMENTE LOCAL</span><time id="clock">—</time></div>
+      </header>
+
+      <div class="content">
+        <section class="intro" id="visao">
+          <div><p class="eyebrow">CENTRAL DE CONTROLE <span class="eyebrow-line"></span> OPENRC</p><h1>Seu bot, <em>sob controle.</em></h1><p class="subtitle">Um lugar para acompanhar a LaynAI e cuidar dela sem sair do localhost.</p></div>
+          <div class="ambient-orb" aria-hidden="true"><span>✦</span></div>
+        </section>
+
+        <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+
+        <section class="overview-grid" aria-label="Visão geral">
+          <article class="card status-card">
+            <div class="card-heading"><span class="mini-icon">◉</span><span>ESTADO DO BOT</span><span class="card-corner">01</span></div>
+            <div class="status-main"><span id="status-led" class="status-led"></span><strong id="status-text">Verificando…</strong></div>
+            <p id="status-detail" class="muted">Consultando OpenRC e conexão com Discord.</p>
+            <div class="status-lines"><div><span>Gateway Discord</span><span id="gateway-status">—</span></div><div><span>Banco de dados</span><span id="database-status">—</span></div><div><span>Versão instalada</span><code id="revision">—</code></div></div>
+          </article>
+
+          <article class="card usage-card">
+            <div class="card-heading"><span class="mini-icon">⌁</span><span>ATIVIDADE DE HOJE</span><span class="card-corner">02</span></div>
+            <div class="metric"><span id="requests">—</span><small>pedidos recebidos</small></div>
+            <div class="usage-divider"></div>
+            <div class="usage-mini"><div><strong id="tokens">—</strong><span>tokens</span></div><div><strong id="calls">—</strong><span>chamadas de modelo</span></div></div>
+            <p class="micro">Contagem diária em UTC · somente leitura</p>
+          </article>
+
+          <article class="card controls-card">
+            <div class="card-heading"><span class="mini-icon">⌘</span><span>CONTROLES</span><span class="card-corner">03</span></div>
+            <h2>Comandos rápidos</h2><p class="muted">As ações usam o serviço <code>laynai</code> do OpenRC.</p>
+            <div class="control-buttons"><button id="start-btn" class="button primary" data-action="start"><span>▶</span> Ligar bot</button><button id="restart-btn" class="button" data-action="restart"><span>↻</span> Reiniciar</button><button id="stop-btn" class="button danger" data-action="stop"><span>■</span> Desligar</button></div>
+            <p id="pause-note" class="control-note">Desligar pausa atualizações e impede o início automático no próximo boot.</p>
+          </article>
+        </section>
+
+        <section class="lower-grid">
+          <article class="card console-card" id="console">
+            <div class="section-head"><div><p class="eyebrow">OBSERVABILIDADE</p><h2>Console <span class="live-badge"><span></span> AO VIVO</span></h2></div><button id="refresh-logs" class="icon-button" aria-label="Atualizar logs" title="Atualizar logs">↻</button></div>
+            <div class="tabs" role="tablist" aria-label="Origem do log"><button class="tab active" data-source="bot" role="tab" aria-selected="true">Bot</button><button class="tab" data-source="errors" role="tab" aria-selected="false">Erros</button><button class="tab" data-source="updates" role="tab" aria-selected="false">Atualizações</button></div>
+            <div class="terminal"><div class="terminal-head"><span class="terminal-dots"><i></i><i></i><i></i></span><span id="log-path">/var/log/laynai/bot.log</span><span class="terminal-tail">ÚLTIMAS LINHAS</span></div><pre id="log-output" aria-live="polite">Carregando logs…</pre></div>
+          </article>
+
+          <article class="card backup-card" id="backups">
+            <div class="section-head"><div><p class="eyebrow">SEGURANÇA</p><h2>Backups</h2></div><span id="backup-count" class="count-pill">—</span></div>
+            <p class="muted">Pontos de restauração guardados nesta máquina. Nenhum arquivo é exposto para download pelo painel.</p>
+            <div id="backup-list" class="backup-list"><div class="empty">Carregando backups…</div></div>
+            <div class="backup-foot"><span>✦</span> Antes de cada deploy, o bot guarda uma cópia.</div>
+          </article>
+        </section>
+        <footer><span>LAYNAI CONTROL ROOM</span><span>localhost:8787 · privado por padrão</span></footer>
+      </div>
+    </main>
+  </div>
+  <dialog id="confirm-dialog"><form method="dialog"><p class="eyebrow">CONFIRMAR AÇÃO</p><h2 id="confirm-title">Tem certeza?</h2><p id="confirm-copy" class="muted"></p><div class="dialog-actions"><button value="cancel" class="button">Cancelar</button><button id="confirm-yes" value="confirm" class="button danger">Confirmar</button></div></form></dialog>
+</body>
+</html>

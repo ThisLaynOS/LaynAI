@@ -36,4 +36,15 @@ tail -n 100 /var/log/laynai/update.log
 
 O atualizador registra a revisão implantada em `data/.deployed-revision` e a revisão que falhou em `data/.failed-revision`. Ambos ficam fora do Git. O serviço OpenRC continua supervisionando o processo entre atualizações.
 
+## Painel local
+
+O painel roda como serviço OpenRC separado (`laynai-dashboard`) em **http://127.0.0.1:8787**. Ele nunca escuta na interface pública. Mostra saúde do bot, uso diário, revisão instalada, pontos de restauração e últimos logs de bot, erros e deploys. Os botões usam apenas as ações fixas `start`, `stop` e `restart` do serviço `laynai`, sem executar texto digitado no navegador. Desligar pelo painel cria `data/.dashboard-paused`, pausa o cron e remove `laynai` do runlevel padrão para ele continuar desligado após reboot. Ligar ou reiniciar com sucesso reativa o início automático e remove a pausa. Quando o painel está rodando, o atualizador também o reinicia após cada deploy para carregar alterações do próprio painel.
+
+```sh
+rc-service laynai-dashboard status
+tail -n 100 /var/log/laynai/dashboard.err
+```
+
+O navegador não recebe credenciais, conteúdo dos backups nem comandos de shell. As ações POST exigem origem local e token anti-CSRF. **Loopback não equivale a autenticação** para outras contas/processos desta máquina; não exponha a porta 8787 por proxy, túnel público ou firewall sem adicionar autenticação. O arquivo OpenRC versionado está em `ops/laynai-dashboard.openrc`.
+
 Referências: [proteção de branches no GitHub](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/managing-protected-branches) e [supervise-daemon no OpenRC](https://github.com/OpenRC/openrc/blob/master/supervise-daemon-guide.md).

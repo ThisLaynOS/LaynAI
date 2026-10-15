@@ -24,8 +24,10 @@ ROOT = Path(__file__).resolve().parents[1]
 STATE_DIR = ROOT / 'data'
 DEPLOYED_REVISION = STATE_DIR / '.deployed-revision'
 FAILED_REVISION = STATE_DIR / '.failed-revision'
+PAUSED = STATE_DIR / '.dashboard-paused'
 READY_URL = 'http://127.0.0.1:8080/readyz'
 SERVICE = 'laynai'
+DASHBOARD_SERVICE = 'laynai-dashboard'
 BACKUP_DIR = ROOT / 'backups' / 'restorepoints'
 
 
@@ -69,6 +71,21 @@ def start_service():
 
 def stop_service():
     command('rc-service', SERVICE, 'stop', new_session=True)
+
+
+def dashboard_running():
+    result = subprocess.run(('rc-service', DASHBOARD_SERVICE, 'status'),
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            timeout=8, check=False)
+    return result.returncode == 0
+
+
+def restart_dashboard():
+    command('rc-service', DASHBOARD_SERVICE, 'restart', new_session=True)
+    with urllib.request.urlopen('http://127.0.0.1:8787/healthz', timeout=3) as response:
+        if response.status != 200:
+            raise RuntimeError('O painel não respondeu após reiniciar.')
+    command('rc-service', DASHBOARD_SERVICE, 'status')
 
 
 def validate(revision):
@@ -160,7 +177,7 @@ def restore_database(snapshot, destination):
         temporary.unlink(missing_ok=True)
 
 
-def restore_previous(branch, previous, snapshot, db_path):
+def restore_previous(branch, previous, snapshot, db_path, dashboard_active=False):
     stop_service()
     if git('status', '--porcelain', '--untracked-files=no', capture=True):
         raise RuntimeError('Arquivos versionados mudaram durante a falha; restaure manualmente.')
@@ -171,9 +188,14 @@ def restore_previous(branch, previous, snapshot, db_path):
     os.chmod(ROOT / '.env', 0o600)
     restore_database(snapshot, db_path)
     start_service()
+    if dashboard_active:
+        restart_dashboard()
 
 
 def deploy(branch='main'):
+    if PAUSED.exists():
+        print('Bot desligado pelo painel; atualização automática pausada.', flush=True)
+        return
     ensure_clean_branch(branch)
     git('fetch', '--quiet', 'origin', branch)
     current = git('rev-parse', 'HEAD', capture=True)
@@ -193,6 +215,7 @@ def deploy(branch='main'):
     ensure_same_dependencies(current, target)
     print(f'Validando {target[:12]}', flush=True)
     validate(target)
+    dashboard_active = dashboard_running()
     stop_service()
     try:
         snapshot, db_path = backup_state(current)
@@ -202,11 +225,13 @@ def deploy(branch='main'):
     try:
         git('merge', '--ff-only', target)
         start_service()
+        if dashboard_active:
+            restart_dashboard()
     except (OSError, subprocess.CalledProcessError, RuntimeError):
         write_revision(FAILED_REVISION, target)
         print(f'Restaurando {current[:12]} de {snapshot}...', file=sys.stderr, flush=True)
         try:
-            restore_previous(branch, current, snapshot, db_path)
+            restore_previous(branch, current, snapshot, db_path, dashboard_active)
         except (OSError, subprocess.CalledProcessError, RuntimeError) as error:
             raise RuntimeError(f'Rollback automático falhou; ponto de restauração preservado em {snapshot}.') from error
         raise RuntimeError(f'A revisão {target[:12]} falhou; código e banco restaurados em {current[:12]}.')

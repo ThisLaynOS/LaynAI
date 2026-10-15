@@ -27,11 +27,15 @@ class DeployTest(unittest.TestCase):
             ('STATE_DIR', root / 'data'),
             ('DEPLOYED_REVISION', root / 'data/.deployed-revision'),
             ('FAILED_REVISION', root / 'data/.failed-revision'),
+            ('PAUSED', root / 'data/.dashboard-paused'),
             ('BACKUP_DIR', root / 'backups/restorepoints'),
         ):
             patcher = patch.object(updater, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        dashboard_patcher = patch.object(updater, 'dashboard_running', return_value=False)
+        dashboard_patcher.start()
+        self.addCleanup(dashboard_patcher.stop)
 
     def mock_git(self, target=NEW, dirty=False):
         def git(*args, capture=False):
@@ -95,7 +99,7 @@ class DeployTest(unittest.TestCase):
                 patch.object(updater, 'restore_previous') as restore:
             with self.assertRaisesRegex(RuntimeError, 'código e banco restaurados'):
                 updater.deploy()
-        restore.assert_called_once_with('main', OLD, Path(self.temp.name), Path(self.temp.name) / 'db')
+        restore.assert_called_once_with('main', OLD, Path(self.temp.name), Path(self.temp.name) / 'db', False)
         self.assertEqual(updater.FAILED_REVISION.read_text(), NEW + '\n')
         self.assertFalse(updater.DEPLOYED_REVISION.exists())
 
@@ -113,12 +117,32 @@ class DeployTest(unittest.TestCase):
                 updater.deploy()
         self.assertFalse(any(call.args[0] == 'fetch' for call in git.call_args_list))
 
+    def test_dashboard_stop_pauses_deploy(self):
+        updater.PAUSED.parent.mkdir()
+        updater.PAUSED.write_text('paused\n')
+        with patch.object(updater, 'git') as git:
+            updater.deploy()
+        git.assert_not_called()
+
     def test_start_checks_openrc_supervision(self):
         with patch.object(updater, 'command') as command, \
                 patch.object(updater, 'ready', return_value=True):
             updater.start_service()
         command.assert_any_call('rc-service', 'laynai', 'start', new_session=True)
         command.assert_any_call('rc-service', 'laynai', 'status')
+
+    def test_running_dashboard_restarts_after_deploy(self):
+        with patch.object(updater, 'git', self.mock_git()), \
+                patch.object(updater, 'ensure_fast_forward'), \
+                patch.object(updater, 'ensure_same_dependencies'), \
+                patch.object(updater, 'validate'), \
+                patch.object(updater, 'dashboard_running', return_value=True), \
+                patch.object(updater, 'stop_service'), \
+                patch.object(updater, 'backup_state', return_value=(Path(self.temp.name), Path(self.temp.name) / 'db')), \
+                patch.object(updater, 'start_service'), \
+                patch.object(updater, 'restart_dashboard') as dashboard:
+            updater.deploy()
+        dashboard.assert_called_once_with()
 
     def test_backup_failure_restarts_old_service_without_merging(self):
         git = self.mock_git()

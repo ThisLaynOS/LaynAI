@@ -1,0 +1,41 @@
+#!/sbin/openrc-run
+
+name="LaynAI Dashboard"
+description="Painel local de controle do LaynAI"
+supervisor=supervise-daemon
+
+: "${directory:=/root/chatbot}"
+: "${command:=/root/chatbot/.venv/bin/python}"
+: "${command_args:=dashboard/server.py}"
+: "${pidfile:=/run/${RC_SVCNAME}.pid}"
+: "${output_log:=/var/log/laynai/dashboard.log}"
+: "${error_log:=/var/log/laynai/dashboard.err}"
+: "${respawn_delay:=5}"
+: "${respawn_max:=0}"
+: "${respawn_period:=60}"
+
+supervise_daemon_args="--chdir ${directory} --retry TERM/15/KILL/5"
+command_background=false
+
+depend() {
+    need net
+    after laynai
+}
+
+start_pre() {
+    checkpath --directory --mode 0755 /var/log/laynai
+    [ -f "${directory}/dashboard/server.py" ] || return 1
+    [ -x "$command" ] || return 1
+    export PYTHONUNBUFFERED=1
+}
+
+start_post() {
+    local i=0
+    while [ "$i" -lt 15 ]; do
+        wget -q -O /dev/null "http://127.0.0.1:8787/healthz" 2>/dev/null && return 0
+        sleep 1
+        i=$((i + 1))
+    done
+    eerror "Dashboard não respondeu em localhost:8787"
+    return 1
+}
