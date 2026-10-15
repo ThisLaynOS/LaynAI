@@ -1,0 +1,29 @@
+services:
+  bot:
+    build: .
+    image: laynai-bot:local
+    init: true
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_PATH: /app/data/bot.sqlite
+    volumes:
+      - bot-data:/app/data
+    ports:
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    stop_grace_period: 30s
+    mem_limit: 256m
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
+volumes:
+  bot-data:
